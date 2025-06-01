@@ -5,12 +5,12 @@ Implements secure knowledge management operations
 
 import uuid
 from datetime import datetime
+from enum import Enum
 from typing import Dict, Any, Optional, List, Union
 
-from core.event_processor import EventType
 from tools.tool_interface import ToolAdapter, ToolType, ToolMetadata, ExecutionResult, SecurityContext, PermissionLevel
 
-class KnowledgeOperation(Enum):
+class KnowledgeOperationType(Enum):
     """Supported knowledge operations"""
     SEARCH = "search"
     RETRIEVE = "retrieve"
@@ -24,151 +24,126 @@ class KnowledgeTool(ToolAdapter):
     Adapter for knowledge management operations
     """
     def __init__(self):
-        # Create tool metadata
-        metadata = ToolMetadata(
-            name="knowledge_tool",
-            description="Secure knowledge management with access control",
-            version="1.0.0",
-            author="Manus AI Clone Team",
-            license_type="MIT"
-        )
+        # Knowledge storage
+        self.knowledge_store = {}  # type: Dict[str, Dict[str, Any]]
         
-        # Initialize base class
-        super().__init__(
-            tool_type=ToolType.KNOWLEDGE,
-            metadata=metadata,
-            permission_level=PermissionLevel.READ
-        )
+        # Configuration
+        self.default_permission = PermissionLevel.READ
+        self.max_document_size = 5 * 1024 * 1024  # bytes (5MB)
         
-        # Knowledge-specific configuration
-        self.max_query_length = 1000
-        self.max_result_size = 10 * 1024 * 1024  # bytes (10MB)
-        self.indexed_sources = ["internal_knowledge", "external_docs", "research_papers"]
+        # Security settings
+        self.restricted_topics = []  # type: List[str]
+        
+        # Component references
+        self.tool_adapter = None  # type: Optional[ToolAdapter]
+        
+        # Statistics
+        self.usage_stats = {
+            "total_queries": 0,
+            "successful_queries": 0,
+            "failed_queries": 0,
+            "last_reset": datetime.now().isoformat()
+        }
 
-    def _validate_parameters(self, parameters: Dict[str, Any]) -> bool:
+    def _validate_input(self, command: str, parameters: Dict[str, Any]) -> bool:
         """
-        Validate knowledge operation parameters
+        Validate command and parameters
         
         Args:
+            command: Command to validate
             parameters: Parameters to validate
             
         Returns:
-            True if valid, False otherwise
+            True if valid
         """
-        # Check required parameter
-        if "operation" not in parameters:
+        # Basic validation
+        if not command or not isinstance(command, str):
             return False
             
-        # Validate operation type
-        try:
-            operation = KnowledgeOperation(parameters["operation"])
-        except ValueError:
-            return False
-            
-        # Operation-specific validation
-        if operation == KnowledgeOperation.SEARCH:
+        # Parameter validation varies by command
+        if command == "search_knowledge":
             return "query" in parameters
-            
-        elif operation == KnowledgeOperation.RETRIEVE:
+        elif command == "retrieve_document":
+            return "document_id" in parameters
+        elif command == "store_document":
+            return "content" in parameters and "metadata" in parameters
+        elif command == "update_document":
+            return "document_id" in parameters and "content" in parameters
+        elif command == "delete_document":
             return "document_id" in parameters
             
-        elif operation == KnowledgeOperation.STORE:
-            return all(key in parameters for key in ["content", "source_type"])
-            
-        elif operation == KnowledgeOperation.DELETE:
-            return "document_id" in parameters
-            
-        elif operation == KnowledgeOperation.UPDATE:
-            return all(key in parameters for key in ["document_id", "content"])
-            
-        return True
+        return False
 
-    def _execute_direct(self, parameters: Dict[str, Any]) -> ExecutionResult:
+    def execute(self, 
+               command: str,
+               parameters: Dict[str, Any],
+               context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Execute knowledge operation based on parameters
+        Execute a knowledge operation
         
         Args:
-            parameters: Dictionary containing operation details
+            command: Type of knowledge operation
+            parameters: Operation parameters
+            context: Security context
             
         Returns:
-            Execution result
+            Operation result
         """
+        # Validate input
+        if not self._validate_input(command, parameters):
+            return self._create_error_response("Invalid input")
+            
+        # Check security permissions
+        if not self._check_permissions(context, command):
+            return self._create_error_response("Access denied")
+            
+        # Handle different commands
         try:
-            # Parse operation
-            operation = KnowledgeOperation(parameters["operation"])
-            
-            # Execute operation
-            if operation == KnowledgeOperation.SEARCH:
+            if command == "search_knowledge":
                 return self._handle_search(parameters)
-                
-            elif operation == KnowledgeOperation.RETRIEVE:
+            elif command == "retrieve_document":
                 return self._handle_retrieve(parameters)
-                
-            elif operation == KnowledgeOperation.STORE:
+            elif command == "store_document":
                 return self._handle_store(parameters)
-                
-            elif operation == KnowledgeOperation.DELETE:
-                return self._handle_delete(parameters)
-                
-            elif operation == KnowledgeOperation.UPDATE:
+            elif command == "update_document":
                 return self._handle_update(parameters)
-                
-            # Unknown operation
-            return ExecutionResult(
-                tool_name=self.metadata.name,
-                success=False,
-                output=None,
-                error=f"Unsupported operation: {operation.value}"
-            )
-            
+            elif command == "delete_document":
+                return self._handle_delete(parameters)
+            else:
+                return self._create_error_response(f"Unknown command: {command}")
         except Exception as e:
-            return ExecutionResult(
-                tool_name=self.metadata.name,
+            # Log error
+            self._log_operation(
+                command=command,
+                parameters=parameters,
                 success=False,
-                output=None,
                 error=str(e)
             )
+            return self._create_error_response(str(e))
 
-    def _handle_search(self, params: Dict[str, Any]) -> ExecutionResult:
+    def _handle_search(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
         Handle knowledge search operation
         
         Args:
-            params: Operation parameters
+            parameters: Operation parameters
             
         Returns:
-            Execution result
+            Operation result
         """
-        # Extract parameters
-        query = params["query"]
-        source = params.get("source_type")
-        max_results = params.get("max_results", 5)
+        query = parameters.get("query")
         
-        # Validate query length
-        if len(query) > self.max_query_length:
-            raise ValueError(f"Query exceeds maximum length ({self.max_query_length} characters)")
+        # Check query restrictions
+        if not self._is_query_allowed(query):
+            return self._create_error_response("Query restricted")
             
-        # Simulate search results
-        results = [
-            {
-                "document_id": f"doc_{i}",
-                "title": f"Document {i} Title",
-                "score": 1.0 - (i * 0.1),
-                "preview": f"... document {i} preview ..."
-            } for i in range(max_results)
-        ]
-        
-        # Return result
-        return ExecutionResult(
-            tool_name=self.metadata.name,
-            success=True,
-            output={
-                "query": query,
-                "source": source or "all",
-                "results": results,
-                "total": len(results)
-            }
-        )
+        # Would implement actual search logic
+        return {
+            "status": "success",
+            "query": query,
+            "results": [],
+            "timestamp": datetime.now().isoformat()
+        }
 
     def _handle_retrieve(self, params: Dict[str, Any]) -> ExecutionResult:
         """
@@ -197,39 +172,41 @@ class KnowledgeTool(ToolAdapter):
             }
         )
 
-    def _handle_store(self, params: Dict[str, Any]) -> ExecutionResult:
+    def _handle_store(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Handle document storage
+        Handle document storage operation
         
         Args:
-            params: Operation parameters
+            parameters: Operation parameters
             
         Returns:
-            Execution result
+            Operation result
         """
-        # Extract parameters
-        content = params["content"]
-        source_type = params["source_type"]
-        document_id = params.get("document_id", str(uuid.uuid4()))
+        content = parameters.get("content")
+        metadata = parameters.get("metadata", {})
         
-        # Validate content size
-        if len(content) > self.max_result_size:
-            raise ValueError(f"Content exceeds maximum size ({self.max_result_size} characters)")
-            
-        # Validate source type
-        if source_type not in self.indexed_sources:
-            raise ValueError(f"Source type {source_type} not allowed")
-            
-        # Simulate storing document
-        return ExecutionResult(
-            tool_name=self.metadata.name,
-            success=True,
-            output={
-                "document_id": document_id,
-                "stored_chars": len(content),
-                "source_type": source_type
-            }
-        )
+        # Generate document ID
+        document_id = str(uuid.uuid4())
+        
+        # Add timestamp to metadata
+        metadata["created_at"] = datetime.now().isoformat()
+        
+        # Store document
+        self.knowledge_store[document_id] = {
+            "content": content,
+            "metadata": metadata
+        }
+        
+        # Update statistics
+        self.usage_stats["total_queries"] += 1
+        self.usage_stats["successful_queries"] += 1
+        
+        return {
+            "status": "success",
+            "document_id": document_id,
+            "action": "stored",
+            "timestamp": datetime.now().isoformat()
+        }
 
     def _handle_delete(self, params: Dict[str, Any]) -> ExecutionResult:
         """
@@ -254,34 +231,39 @@ class KnowledgeTool(ToolAdapter):
             }
         )
 
-    def _handle_update(self, params: Dict[str, Any]) -> ExecutionResult:
+    def _handle_update(self, parameters: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Handle document update
+        Handle document update operation
         
         Args:
-            params: Operation parameters
+            parameters: Operation parameters
             
         Returns:
-            Execution result
+            Operation result
         """
-        # Extract parameters
-        document_id = params["document_id"]
-        content = params["content"]
+        document_id = parameters.get("document_id")
+        content = parameters.get("content")
         
-        # Validate content size
-        if len(content) > self.max_result_size:
-            raise ValueError(f"Content exceeds maximum size ({self.max_result_size} characters)")
+        # Check if document exists
+        if document_id not in self.knowledge_store:
+            return self._create_error_response("Document not found")
             
-        # Simulate update
-        return ExecutionResult(
-            tool_name=self.metadata.name,
-            success=True,
-            output={
-                "document_id": document_id,
-                "updated_chars": len(content),
-                "timestamp": datetime.now().isoformat()
-            }
-        )
+        # Update document
+        self.knowledge_store[document_id]["content"] = content
+        
+        # Update metadata
+        self.knowledge_store[document_id]["metadata"]["updated_at"] = datetime.now().isoformat()
+        
+        # Update statistics
+        self.usage_stats["total_queries"] += 1
+        self.usage_stats["successful_queries"] += 1
+        
+        return {
+            "status": "success",
+            "document_id": document_id,
+            "action": "updated",
+            "timestamp": datetime.now().isoformat()
+        }
 
     def search_knowledge(self, 
                        query: str,
