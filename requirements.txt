@@ -1,0 +1,32 @@
+# Core dependencies for Manus AI Clone
+
+# Core framework
+fastapi>=0.95.0
+uvicorn>=0.21.1
+python-dotenv>=1.0.0
+pydantic>=2.0.0
+
+# Async support
+asyncpg>=0.27.0
+httpx>=0.24.0
+websockets>=10.4
+
+# Enum support
+classic-extensions>=0.6.0
+
+# Logging
+structlog>=23.1.0
+
+# Testing (for later phases)
+pytest>=7.3.1
+pytest-asyncio>=0.21.0
+pytest-cov>=4.0.0
+
+# Security (for later phases)
+bandit>=1.7.5
+bcrypt>=4.0.1
+pyjwt>=2.7.0
+
+docker>=6.0.0  # For sandbox execution
+pyyaml>=6.0    # For configuration management
+regex>=2023.10.3  # For advanced pattern matching
